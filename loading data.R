@@ -1,5 +1,9 @@
 library(tidyverse)
 library(readxl)
+library(performance)
+library(DHARMa)
+library(lmerTest)
+library(glmmTMB)
 #----------------------=====
 
 read <- function(range, sheet){
@@ -111,32 +115,62 @@ total_data <- dplyr::bind_rows(ileum, duodenum, leg, jejunum, brain, kidney, liv
 
 data_long <- total_data %>% 
   select(-IP2) %>% 
-  pivot_longer(IP3:IP6, names_to = "IP", values_to = "value")
+  pivot_longer(IP3:IP6, names_to = "IP", values_to = "value") %>% 
+  mutate(Broiler = if_else(Tissue == "Brain"|
+                             Tissue == "Leg"|
+                             Tissue == "BM"|
+                             Tissue == "Kidney"|
+                             Tissue == "Liver", "Broiler", "Non-Broiler")) %>% 
+  drop_na(value) # 4 data points
 
 #----------------------=====
-# Analyse====
 
-model <- lm(value ~ IP + Diet, data = data_long)
 
+# Total=====
+
+ran_mod <- lmer(log10(Total+1)~ Diet * Tissue + (1|individual/rep), data = data_long)
+
+# ran_mod <- lmer(log10(Total+1)~ Diet + (1|Tissue)+(1|individual/rep), data = data_long)
+
+
+# Analyse by IP ====
+
+# BM and Leg have very low IP levels, but removing these does not improve fit of model
+
+model <- lm(value+1 ~ IP + Diet, data = data_long)
+MASS::boxcox(model)
 
 
 #log
 data_long <- data_long %>% 
-  mutate(log_value = log10(value+1))
+  mutate(log_value = log10(value+10))
 
 
-model <- lm(log10(value+1) ~ IP + Diet, data = data_long)
+model <- lm(log_value ~ IP + Diet + Broiler, data = data_long)
+MASS::boxcox(model)
 
-ran_mod <- lmer(log10(value+1) ~ 1 + (1|individual/rep) + (1|Tissue), data = data_long)
+resid.mm <- simulateResiduals(model)
 
-ran_mod <- lmer(log_value ~ IP + Diet + (1|individual/rep) + (1|Tissue), data = data_long)
+plot(resid.mm)
+
+
+ran_mod <- lmer(log_value ~ 1 + (1|individual/rep) + (1|Tissue), data = data_long)
 
 resid.mm <- simulateResiduals(ran_mod)
 
 plot(resid.mm)
 
-# scaled and centered
 
-data_long <- data_long %>% 
-  mutate(scaled_var = (log10(value+1) - mean(log10(value+1), na.rm = T)) / sd(log10(value+1), na.rm = T))
+# Best fit model
+
+
+ran_mod1 <- lmer(log_value ~ Tissue + Diet * IP + (1|individual/rep), data = data_long)
+
+ran_mod2 <- glmmTMB(value+1 ~ IP * Tissue + Diet + (1|individual/rep), data = data_long, family = Gamma(link = "log"))
+
+# Binary vs continuous model???
+
+data_long2 <- data_long %>% mutate(binary = if_else(value > 0, 1, 0)) 
+
+model <- glmer(binary ~ IP * Tissue + Diet +(1|individual/rep), data = data_long2, family =binomial, control = glmerControl(optimizer = "Nelder_Mead"))
 
